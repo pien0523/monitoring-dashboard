@@ -7,6 +7,7 @@ Streamlit entry point.  Run with:
 from __future__ import annotations
 
 import os
+from datetime import timedelta
 
 import numpy as np
 import pandas as pd
@@ -223,36 +224,44 @@ def _resolve_data_source() -> pd.DataFrame:
 def render_sidebar(df: pd.DataFrame) -> pd.Timestamp:
     """Render the time control section of the sidebar and return the selected timestamp.
 
+    Works with any active DataFrame — both the built-in sample dataset and a
+    user-uploaded CSV — by deriving the time range from the passed DataFrame.
+
     Args:
-        df: Full sensor DataFrame.
+        df: Full sensor DataFrame (sample or uploaded).
 
     Returns:
         Selected pd.Timestamp.
     """
+    t_min: pd.Timestamp = df["timestamp"].min()
+    t_max: pd.Timestamp = df["timestamp"].max()
+
+    st.sidebar.markdown("**Time Control**")
+    st.sidebar.caption(
+        f"Data range: {t_min.strftime('%Y-%m-%d %H:%M')} → {t_max.strftime('%Y-%m-%d %H:%M')}"
+    )
+
     time_mode = st.sidebar.radio(
-        "Time Mode",
+        "Mode",
         ["Latest Snapshot", "Historical Replay"],
         index=0,
     )
 
-    t_min = df["timestamp"].min()
-    t_max = df["timestamp"].max()
-
     if time_mode == "Latest Snapshot":
         selected_time = t_max
-        st.sidebar.info(f"Showing latest data: **{selected_time.strftime('%Y-%m-%d %H:%M')}**")
+        st.sidebar.info(f"Viewing: **{selected_time.strftime('%Y-%m-%d %H:%M')}**")
     else:
-        # Build slider steps every SLIDER_STEP_MINUTES
-        total_steps = int((t_max - t_min).total_seconds() / 60 / SLIDER_STEP_MINUTES)
-        step_idx = st.sidebar.slider(
+        # Datetime slider — thumb displays the actual timestamp, step = 15 min.
+        # Works for any date range, including uploaded CSVs with different periods.
+        selected_dt = st.sidebar.slider(
             "Select Time",
-            min_value=0,
-            max_value=total_steps,
-            value=total_steps,
-            step=1,
-            format="%d",
+            min_value=t_min.to_pydatetime(),
+            max_value=t_max.to_pydatetime(),
+            value=t_max.to_pydatetime(),
+            step=timedelta(minutes=SLIDER_STEP_MINUTES),
+            format="YYYY-MM-DD HH:mm",
         )
-        selected_time = t_min + pd.Timedelta(minutes=step_idx * SLIDER_STEP_MINUTES)
+        selected_time = pd.Timestamp(selected_dt)
         st.sidebar.info(f"Viewing: **{selected_time.strftime('%Y-%m-%d %H:%M')}**")
 
     st.sidebar.markdown("---")
