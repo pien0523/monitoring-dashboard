@@ -65,6 +65,8 @@ using:
 | Cost-benefit analysis | `src/recommendations.py` — planned vs unplanned cost |
 | Time-travel historical replay | `app.py` — 15-minute step slider |
 | Plotly charts | `src/visualization.py` |
+| Data source switch | `app.py` sidebar — toggle between sample dataset and uploaded CSV |
+| Data quality check | `src/data_quality.py` — 9 checks; blocking errors halt load, warnings allow continue |
 
 ---
 
@@ -145,7 +147,12 @@ built-in 7-machine, 7-day synthetic dataset at any time.
 
 ```mermaid
 flowchart LR
-    A[Synthetic Sensor Data] --> B[Data Loader]
+    A[Sample Dataset] --> SW[Data Source Switch]
+    U[Uploaded CSV] --> DQ[Data Quality Check]
+    DQ -- blocking errors --> ERR[st.error + st.stop]
+    DQ -- warnings / pass --> SW
+    SW --> AD[Active Dataset]
+    AD --> B[Data Loader]
     B --> C[OEE KPI Engine]
     B --> D[Anomaly Detection]
     B --> E[Predictive Maintenance Model]
@@ -175,6 +182,7 @@ manufacturing-monitoring-dashboard/
 │   ├── schemas.py            # Dataclasses and column contracts
 │   ├── simulator.py          # Synthetic data generator
 │   ├── data_loader.py        # CSV load + auto-generate fallback
+│   ├── data_quality.py       # Uploaded CSV validation and preparation
 │   ├── kpi.py                # OEE and bottleneck logic
 │   ├── anomaly.py            # Isolation Forest + alert feed
 │   ├── maintenance.py        # Random Forest + health scoring
@@ -185,7 +193,8 @@ manufacturing-monitoring-dashboard/
     ├── test_simulator.py
     ├── test_kpi.py
     ├── test_anomaly.py
-    └── test_maintenance.py
+    ├── test_maintenance.py
+    └── test_data_quality.py  # Covers upload validation, type conversion, edge cases
 ```
 
 ---
@@ -256,6 +265,16 @@ For verbose output:
 ```bash
 pytest -v
 ```
+
+**49 tests across 5 test files:**
+
+| File | Coverage |
+|---|---|
+| `tests/test_simulator.py` | Row count, schema, machine IDs, status/shift values, monotonic timestamps |
+| `tests/test_kpi.py` | OEE range, availability for down machines, empty input, bottleneck score |
+| `tests/test_anomaly.py` | Isolation Forest output columns, small-data fallback, severity classification, alert feed |
+| `tests/test_maintenance.py` | Health score bounds, rolling features, RF model + fallback, recommendation columns, cost savings, time-window filtering |
+| `tests/test_data_quality.py` | Missing required columns (blocking), unparseable timestamp (blocking), invalid status (blocking), duplicate `(machine_id, timestamp)` (warning), negative numeric values (warning), `defect_count > output_count` (warning), `prepare_uploaded_data` type conversion |
 
 ---
 
