@@ -21,6 +21,7 @@ from src.config import (
     SimulationConfig,
 )
 from src.data_loader import get_or_create_data
+from src.data_quality import has_blocking_errors, prepare_uploaded_data, validate_data_quality
 from src.kpi import (
     calculate_bottleneck_score,
     calculate_oee,
@@ -67,10 +68,14 @@ def load_data() -> pd.DataFrame:
 
 
 @st.cache_data(show_spinner="Training predictive model…")
-def get_trained_model(data_hash: int) -> object:
-    """Train and cache the Random Forest model."""
-    df = load_data()
-    return train_maintenance_model(df)
+def get_trained_model(data_hash: int, _df: pd.DataFrame) -> object:
+    """Train and cache the Random Forest model.
+
+    Args:
+        data_hash: Stable integer key used by st.cache_data for invalidation.
+        _df: Active sensor DataFrame (underscore prefix skips Streamlit hashing).
+    """
+    return train_maintenance_model(_df)
 
 
 # ---------------------------------------------------------------------------
@@ -126,11 +131,97 @@ def get_time_windows(df: pd.DataFrame, selected_time: pd.Timestamp) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Data source helpers
+# ---------------------------------------------------------------------------
+
+def _show_quality_report(report: dict) -> None:
+    """Render a Data Quality Report expander in the current Streamlit context.
+
+    Args:
+        report: Dict returned by ``validate_data_quality``.
+    """
+    with st.expander("Data Quality Report", expanded=has_blocking_errors(report)):
+        info = report.get("info", {})
+        cols = st.columns(3)
+        cols[0].metric("Rows", f"{info.get('row_count', 0):,}")
+        cols[1].metric("Machines", info.get("machine_count", "—"))
+        cols[2].metric("Columns", info.get("column_count", 0))
+
+        if info.get("time_range"):
+            st.caption(f"Time range: {info['time_range']}")
+
+        errors = report.get("blocking_errors", [])
+        warnings = report.get("warnings", [])
+
+        if errors:
+            st.markdown("**Blocking errors** — must be fixed before the dashboard can load:")
+            for e in errors:
+                st.error(e)
+        if warnings:
+            st.markdown("**Warnings** — dashboard will run, but review these:")
+            for w in warnings:
+                st.warning(w)
+        if not errors and not warnings:
+            st.success("All quality checks passed.")
+
+
+def _resolve_data_source() -> pd.DataFrame:
+    """Render the Data Source section in the sidebar and return the active DataFrame.
+
+    Returns:
+        Sample dataset or user-uploaded dataset after quality validation.
+    """
+    source = st.sidebar.radio(
+        "Data Source",
+        ["Use Sample Manufacturing Dataset", "Upload Company CSV"],
+        index=0,
+    )
+
+    if source == "Use Sample Manufacturing Dataset":
+        return load_data()
+
+    # --- Upload path ---
+    uploaded = st.sidebar.file_uploader(
+        "Upload CSV file",
+        type=["csv"],
+        help="Required columns: timestamp, machine_id, status, utilization_pct, "
+             "temperature_c, vibration_hz, output_count, defect_count, cycle_time_sec",
+    )
+
+    if uploaded is None:
+        st.info("Upload a CSV file in the sidebar to use your own data, or switch to the sample dataset.")
+        st.stop()
+
+    try:
+        raw_df = pd.read_csv(uploaded)
+    except Exception as exc:
+        st.error(f"Could not read the uploaded file: {exc}")
+        st.stop()
+
+    df = prepare_uploaded_data(raw_df)
+    report = validate_data_quality(df)
+
+    _show_quality_report(report)
+
+    if has_blocking_errors(report):
+        st.error(
+            "The uploaded file has blocking errors that prevent the dashboard from loading. "
+            "Fix the issues listed in the Data Quality Report above, then re-upload."
+        )
+        st.stop()
+
+    if report.get("warnings"):
+        st.warning("Data loaded with warnings. Review the Data Quality Report in the sidebar.")
+
+    return df
+
+
+# ---------------------------------------------------------------------------
 # Sidebar
 # ---------------------------------------------------------------------------
 
 def render_sidebar(df: pd.DataFrame) -> pd.Timestamp:
-    """Render sidebar with time control and return the selected timestamp.
+    """Render the time control section of the sidebar and return the selected timestamp.
 
     Args:
         df: Full sensor DataFrame.
@@ -138,9 +229,6 @@ def render_sidebar(df: pd.DataFrame) -> pd.Timestamp:
     Returns:
         Selected pd.Timestamp.
     """
-    st.sidebar.title("⚙️ Dashboard Controls")
-    st.sidebar.markdown("---")
-
     time_mode = st.sidebar.radio(
         "Time Mode",
         ["Latest Snapshot", "Historical Replay"],
@@ -214,7 +302,7 @@ def page_command_center(df: pd.DataFrame, windows: dict, selected_time: pd.Times
     current_snapshot = windows["current_snapshot"]
     today_window = windows["today_window"]
 
-    model = get_trained_model(hash(str(df.shape)))
+    model = get_trained_model(hash((len(df), str(df["timestamp"].max()))), df)
     health_summary = generate_machine_health_summary(df, selected_time, model)
 
     # --- Top KPI cards ---
@@ -592,7 +680,7 @@ def page_predictive_maintenance(df: pd.DataFrame, windows: dict, selected_time: 
     st.markdown("*Random Forest model trained on rolling sensor features*")
     st.markdown("---")
 
-    model = get_trained_model(hash(str(df.shape)))
+    model = get_trained_model(hash((len(df), str(df["timestamp"].max()))), df)
     health_summary = generate_machine_health_summary(df, selected_time, model)
     recommendations = generate_maintenance_recommendations(health_summary)
 
@@ -676,12 +764,16 @@ A positive savings value means scheduled maintenance is financially justified.
 
 def main() -> None:
     """Dashboard entry point."""
-    df = load_data()
+    st.sidebar.title("⚙️ Dashboard Controls")
+    st.sidebar.markdown("---")
+
+    df = _resolve_data_source()
 
     if df.empty:
         st.error("No data available. Run `python -m src.simulator` first.")
         st.stop()
 
+    st.sidebar.markdown("---")
     selected_time = render_sidebar(df)
     windows = get_time_windows(df, selected_time)
 

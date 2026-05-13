@@ -88,6 +88,59 @@ failure probability chart, maintenance recommendation table, and cost-benefit lo
 
 ---
 
+## Using Your Own Data
+
+### How to upload a CSV
+
+1. Open the dashboard (`streamlit run app.py`).
+2. In the left sidebar, select **Upload Company CSV** under *Data Source*.
+3. Click **Browse files** and select your `.csv` file.
+4. A **Data Quality Report** will appear in the sidebar showing row count,
+   machine count, time range, and any issues found.
+
+### Required schema
+
+Your CSV must contain these columns (additional columns are ignored):
+
+| Column | Type | Notes |
+|---|---|---|
+| `timestamp` | datetime string | Any format parseable by `pd.to_datetime` |
+| `machine_id` | string | Unique identifier per machine |
+| `status` | string | Must be one of: `running`, `idle`, `down`, `maintenance` |
+| `utilization_pct` | float | 0–100 |
+| `temperature_c` | float | Sensor temperature in °C |
+| `vibration_hz` | float | Vibration frequency in Hz |
+| `output_count` | int | Units produced per row |
+| `defect_count` | int | Defective units per row |
+| `cycle_time_sec` | float | Cycle time in seconds (0 when machine is not running) |
+
+Optional columns that improve the dashboard if present:
+`shift`, `machine_age_factor`, `latent_degradation`, `event_type`, `downtime_reason`, `needs_maintenance`
+
+### Data quality checks
+
+The dashboard runs these checks automatically on upload:
+
+**Blocking (must be fixed before the dashboard loads):**
+- Missing required columns
+- Timestamp values that cannot be parsed
+- Missing `machine_id` values
+- Invalid `status` values
+
+**Warnings (dashboard runs, but worth reviewing):**
+- Negative numeric sensor values
+- Rows where `defect_count > output_count`
+- Fully duplicate rows
+- Duplicate `(machine_id, timestamp)` pairs
+- Missing values in required columns
+
+### Sample data option
+
+Select **Use Sample Manufacturing Dataset** in the sidebar to revert to the
+built-in 7-machine, 7-day synthetic dataset at any time.
+
+---
+
 ## Architecture
 
 ```mermaid
